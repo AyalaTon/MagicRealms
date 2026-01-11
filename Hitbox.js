@@ -150,4 +150,6 @@ class Hitbox {
   }
 }
 
-module.exports = { Hitbox, Shape, Circle, Rectangle };
+export { Hitbox, Shape, Circle, Rectangle };
+export default Hitbox;
+// module.exports = { Hitbox, Shape, Circle, Rectangle };

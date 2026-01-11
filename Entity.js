@@ -8,6 +8,7 @@ class Entity {
     this.vy = 0;
     this.direction = 0;
     this.isDead = false;
+    this.speed = 0;
 
     // Hitbox por defecto (vacía, las subclases la definen)
     this.hitbox = null;
@@ -61,4 +62,5 @@ class Entity {
   }
 }
 
-module.exports = { Entity };
+export default Entity;
+// module.exports = { Entity };

@@ -27,6 +27,25 @@ class Inventory {
         this.slots = Array.from({ length: size }, () => new Slot());
     }
 
+    consumeItem(itemId, quantity = 1) {
+        let remaining = quantity;
+        for (const slot of this.slots) {
+            if (slot.hasItem() && slot.item.itemId === itemId) {
+                if (slot.item.quantity > remaining) {
+                    slot.item.quantity -= remaining;
+                    return true;
+                } else {
+                    remaining -= slot.item.quantity;
+                    slot.item = null;
+                }
+            }
+            if (remaining <= 0) {
+                return true;
+            }
+        }
+        return false; // No se pudo consumir la cantidad requerida
+    }
+
     moveItem(fromIndex, toIndex, quantity = null) {
         // Validación de índices
         if (
@@ -86,6 +105,20 @@ class Inventory {
 
         throw new Error("Slot destino incompatible");
     }
+
+    hasItem(itemId, quantity = 1) {
+        let total = 0;
+        for (const slot of this.slots) {
+            if (slot.hasItem() && slot.item.itemId === itemId) {
+                total += slot.item.quantity;
+                if (total >= quantity) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
 }
 
-export default new Inventory();
+export { Inventory, Slot };
+export default Inventory;

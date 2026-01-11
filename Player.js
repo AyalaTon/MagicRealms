@@ -2,39 +2,40 @@
 import Entity from './Entity.js';
 import Hitbox, { Circle, Rectangle } from './Hitbox.js';
 
-// Importar contenido de pociones y buffs
-import Potions from './content/Potions.js';
+// Importar contenido de buffs
 import Buffs from "./content/Buffs.js";
+// Importar definiciones de items
+import { itemProperties } from './content/Items.js';
 
 // Importar inventario inicial
 import Inventory from './content/Inventory.js';
+import { e, re } from 'mathjs';
 
 class Player extends Entity {
   constructor(id, username, x, y) {
     super(id, 'player', x, y);
+    this.speed = 3; // Velocidad base del jugador || se puede modificar con equipamiento y buffs
     this.username = username;
     // Estados actuales
     this.energy = 100; // Energía actual
     this.health = 100; // Salud actual
 
+    this.respawnDelay = 5000; // 5 segundos
+    this.respawnTime = null;
+
+    this.direction = 0; // Dirección inicial (en radianes)
+    
     this.stats = {
-      // Stats incrementables
+      // Stats incrementables por el jugador
       strength: 10,
       defense: 5,
       maxHealth: 100,
       maxEnergy: 100,
       agility: 5,
       
-      // Stats calculados en base a otros, modificables por buffs y equipamientos
-      speed: 3,
-      fireResistance: 0,
-      iceResistance: 0,
-      lightningResistance: 0,
-      earthResistance: 0,
-      healthRegen: 0.05,
-      energyRegen:  0.2,
-
       // Otros stats
+      healthRegen: 0.2, // Salud por tick
+      energyRegen: 0.5, // Energía por tick
       experience: 0,
       freePoints: 0,
     };
@@ -42,10 +43,8 @@ class Player extends Entity {
     this.hitbox = new Hitbox(x, y, [
       new Circle(20), // Radio de 20
     ]);
-    // Buffs activos
-    this.buffs = []
-    // Poderes recientes usados por el jugador (para cooldowns, etc.)
-    this.powers = [];
+    // Buffs activos | los cooldowns se manejaran como buffs temporales de tipo cooldown
+    this.buffs = [];
     // Equipamiento del jugador
     this.equipment = {
       rightHand: null,
@@ -67,8 +66,8 @@ class Player extends Entity {
     // socket asociado al jugador (servidor)
     this.owner = null;
   }
-
-  update(entities) {
+  
+  update() { // ToDo 
     // muevo el jugador normalmente
     super.update();
     
@@ -78,138 +77,165 @@ class Player extends Entity {
     this.regenerate();
   }
 
-  updateBuffs() {
-    const now = Date.now();
-    // Filtrar buffs expirados
-    this.buffs = this.buffs.filter((buff) => {
-      const isActive = now - buff.appliedAt < buff.duration;  
-      if (!isActive) {
-        console.log(`Buff ${buff.name} de ${this.username} ha expirado. `);
-      }
-      return isActive;
-    });
+  getState() { // ToDo
+    return {
+      ... super.getState(),
+      username: this.username,
+      energy: this.energy,
+      health: this.health,
+      maxEnergy: this.getStat('maxEnergy'),
+      maxHealth: this.getStat('maxHealth'),
+      owner: this.owner,
+      radius: this.hitbox.shapes[0].radius,
+      respawnTime: this.respawnTime,
+      speed: this.getSpeed(),
+      direction: this.direction,
+      buffs: this.buffs, // Enviar buffs activos al cliente
+    };
   }
 
+  setDirection(angle) {
+    this.direction = angle;
+  }
+
+  // Obtener todos los items equipados (excluyendo gold, inventory, etc.)
+  getEquippedItems() {
+    const items = [];
+    const equipmentSlots = ['rightHand', 'leftHand', 'chest', 'gloves', 'pants', 'boots', 'helmet', 'wings'];
+    const jewelrySlots = ['ring1', 'ring2', 'necklace'];
+
+    equipmentSlots.forEach((slot) => {
+      const item = this.equipment[slot];
+      if (item && item instanceof ItemInstance) {
+        items.push(item);
+      }
+    });
+
+    jewelrySlots.forEach((slot) => {
+      const item = this.equipment.jewelry[slot];
+      if (item && item instanceof ItemInstance) {
+        items.push(item);
+      }
+    });
+
+    return items;
+  }
+  // APROBADO ###############################################################
+
+  // Actualizar buffs activos
+  updateBuffs() {
+    // Obtener tiempo actual
+    const now = Date.now();
+    //Verificar si algún buff ha expirado y eliminarlo de lo contrario aplicar efectos instantáneos
+    const expiredBuffs = [];
+    this.buffs.forEach((buff) => {
+      if (buff.effect.duration) {
+        const elapsed = now - buff.effect.appliedAt;
+        if (elapsed >= buff.effect.duration) {
+          expiredBuffs.push(buff);
+        } else {
+          // Buff aún activo
+          // Aplicar efectos instantáneos si los hay
+          if (buff.effect.stat === 'health' && buff.effect.amount) {
+            // Curación instantánea
+            const healAmount = buff.effect.amount;
+            this.health += healAmount;
+            if (this.health > this.getStat('maxHealth')) {
+              this.health = this.getStat('maxHealth');
+            }
+          } else if (buff.effect.stat === 'energy' && buff.effect.amount) {
+            // Recuperación instantánea de energía
+            const energyAmount = buff.effect.amount;
+            this.energy += energyAmount;
+            if (this.energy > this.getStat('maxEnergy')) {
+              this.energy = this.getStat('maxEnergy');
+            }
+          } // Aquí se pueden agregar más efectos instantáneos según sea necesario
+          // Marcar como aplicado para no repetir
+          buff.effect.amount = 0; // <- para que no se aplique más de una vez
+        }
+      }
+    });
+    this.buffs = this.buffs.filter(buff => !expiredBuffs.includes(buff));
+
+    expiredBuffs.forEach((buff) => {
+      console.log(`Buff ${buff.name} de ${this.username} ha expirado.`);
+    });
+    return;
+  }
+  // Aplicar un buff al jugador
   applyBuff(buffType) {
     const buffTemplate = Buffs[buffType];
-    
     if (!buffTemplate) {
       console.log(`Buff desconocido: ${buffType}`);
-      return { success: false, reason: 'unksnown_buff' };
+      return { success: false, reason: 'unknown_buff' };
     }
-
     // Verificar si ya tiene este buff activo
     const existingBuff = this.buffs.find((b) => b.type === buffType);
-    
     if (existingBuff) {
-      // Renovar duración del buff existente
-      existingBuff.appliedAt = Date.now();
-      console.log(`Buff ${buffTemplate.name} de ${this.username} renovado.`);
-      return { success: true, renewed: true };
+      console.log(`${this.username} ya tiene el buff ${buffTemplate.name} activo.`);
+      return { success: false, reason: 'buff_already_active' };
     }
-
-    // Agregar nuevo buff a la lista
+    // Aplicar nuevo buff - ¡GUARDAR EL TYPE!
     const newBuff = {
-      type: buffType,
+      type: buffType,  // ← ¡IMPORTANTE!  Guardar la key
       name: buffTemplate.name,
-      stat: buffTemplate.effect.stat,
-      multiplier: buffTemplate.effect.multiplier,
-      duration: buffTemplate.effect.duration,
-      appliedAt: Date.now(),
+      effect: { 
+        ... buffTemplate.effect,
+        appliedAt: Date.now()  // ← appliedAt va dentro de effect
+      }
     };
-
     this.buffs.push(newBuff);
+
     console.log(`${this.username} activó buff ${buffTemplate.name} por ${buffTemplate.effect.duration / 1000}s`);
-    
-    return { success: true, renewed: false };
+    return { success: true };
   }
-
-  applyInstantEffect(effect) {
-    switch (effect.stat) {
-      case 'health':
-        this.health = Math.min(this.maxHealth, this.health + effect. amount);
-        console.log(`${this.username} recuperó ${effect.amount} de vida.  Vida actual: ${Math.round(this.health)}`);
-        break;
-
-      case 'energy':
-        this. energy = Math.min(this. maxEnergy, this.energy + effect.amount);
-        console.log(`${this.username} recuperó ${effect.amount} de energía. Energía actual: ${Math.round(this.energy)}`);
-        break;
-
-      default:
-        console.log(`Estadística desconocida: ${effect.stat}`);
+  // Usar una poción del inventario
+  usePotion(potion) {
+    if (this.equipment.inventory.hasItem(potion) === false) {
+      console.log(`${this.username} no tiene poción de ${potion} en el inventario.`);
+      return { success: false, reason: 'no_potion' };
     }
-  }
-
-  // Obtener el multiplicador total para una stat
-  getStatMultiplier(statName) {
-    let multiplier = 1;
-
-    this.buffs.forEach((buff) => {
-      if (buff.stat === statName) {
-        multiplier *= buff.multiplier;
-      }
-    });
-    return multiplier;
-  }
-
-   // Obtener el valor efectivo de una stat (base * multiplicador)
-  getStat(statName) {
-    const baseValue = this.stats[statName] || 0;
-    const multiplier = this.getStatMultiplier(statName);
-    return baseValue * multiplier;
-  }
-
-  regenerate() {
-    const maxHealth = this.getStat('maxHealth');
-    const maxEnergy = this.getStat('maxEnergy');
-    const healthRegen = this.getStat('healthRegen');
-    const energyRegen = this.getStat('energyRegen');
-
-    // Regenerar salud
-    if (this.health < maxHealth) {
-      this.health += healthRegen;
-      if (this.health > maxHealth) {
-        this.health = maxHealth;
-      }
+    const itemDef = itemProperties[potion];
+    if (!itemDef) {
+      console.log(`Item desconocido: ${potion}`);
+      return { success: false, reason: 'unknown_item' };
     }
-
-    // Regenerar energía
-    if (this.energy < maxEnergy) {
-      this.energy += energyRegen;
-      if (this.energy > maxEnergy) {
-        this.energy = maxEnergy;
-      }
+    if (!itemDef.buff) {
+      console.log(`${potion} no tiene buff asociado. `);
+      return { success: false, reason: 'no_buff' };
     }
+    const buffType = itemDef. buff;
+    const buffTemplate = Buffs[buffType];
+    if (!buffTemplate) {
+      console.log(`Buff desconocido: ${buffType}`);
+      return { success: false, reason: 'unknown_buff' };
+    }
+    const existingBuff = this.buffs.find((b) => b.type === buffType);
+    if (existingBuff) {
+      console.log(`${this.username} no puede usar poción de ${itemDef.name} aún (en cooldown).`);
+      return { success: false, reason: 'on_cooldown' };
+    }
+    this.applyBuff(buffType);
+    // ✅ CORRECTO: acceder al inventario dentro de equipment
+    this.equipment.inventory. consumeItem(potion, 1);
+    return { success: true, potion: potion };
   }
-
-  usePotion(potionType) {
-    // Mapear tipo de poción al tipo de buff
-    const potionToBuffMap = {
-      strength:  'strengthBoost',
-      speed: 'speedBoost',
-      defense: 'defenseBoost',
-      health: 'healthBoost',
-      energy: 'energyBoost',
-    };
-
-    const buffType = potionToBuffMap[potionType];
-
-    if (!buffType) {
-      console.log(`Poción desconocida: ${potionType}`);
-      return { success: false, reason: 'unknown_potion' };
-    }
-
-    // Aplicar buff
-    const result = this.applyBuff(buffType);
-
-    if (result.success) {
-      this.potions[potionType]--;
-      console.log(`${this.username} usó poción de ${potionType}.  Restantes: ${this.potions[potionType]}`);
-    }
-    return result;
+  // Manejar respawn del jugador
+  respawn(x, y) {
+    this.isDead = false;
+    this.health = this.getStat('maxHealth');
+    this.energy = this.getStat('maxEnergy');
+    this.x = x;
+    this.y = y;
+    this.vx = 0;
+    this.vy = 0;
+    this.respawnTime = null;
+    this.speed = this.getSpeed();
+    this.hitbox.setPosition(x, y);
+    console.log(`Jugador ${this.username} ha reaparecido.`);
   }
-
+  // Manejar la muerte del jugador
   die() {
     this.isDead = true;
     this.vx = 0;
@@ -217,53 +243,135 @@ class Player extends Entity {
     this.respawnTime = Date.now() + this.respawnDelay;
     
     // Desactivar todos los buffs al morir
-    Object.keys(this.buffs).forEach((buffName) => {
-      this.buffs[buffName].active = false;
-      this.buffs[buffName]. appliedAt = null;
-    });
-
+    this.buffs = [];
     console.log(`Jugador ${this.username} murió.  Respawn en ${this.respawnDelay / 1000} segundos.`);
   }
+  // Obtener tasas de regeneración actuales considerando buffs y equipamiento
+  getRegenRates() {
+    let healthRegen = this.stats. healthRegen;
+    let energyRegen = this.stats. energyRegen;
 
-  respawn() {
-    this.isDead = false;
-    this. health = this.maxHealth;
-    this.energy = this.maxEnergy;
-    this.x = this.spawnX;
-    this.y = this.spawnY;
-    this.vx = 0;
-    this.vy = 0;
-    this.respawnTime = null;
-    this.lastFireTime = 0;
-    this. speed = this.baseSpeed;
-    console.log(`Jugador ${this.username} ha reaparecido.`);
-  }
-
-  getState() {
-    // Calcular tiempo restante de cada buff
-    const activeBuffs = {};
-    Object.keys(this. buffs).forEach((buffName) => {
-      const buff = this.buffs[buffName];
-      if (buff.active && buff.appliedAt) {
-        activeBuffs[buffName] = {
-          active: true,
-          remaining: Math.max(0, buff.duration - (Date.now() - buff.appliedAt)),
-        };
+    // Aplicar modificadores de equipamiento
+    this.getEquippedItems().forEach((item) => {
+      if (item. definition?. attributes?.healthRegen) {
+        healthRegen += item.definition.attributes.healthRegen;
+      }
+      if (item. definition?.attributes?.energyRegen) {
+        energyRegen += item.definition.attributes.energyRegen;
+      }
+      // Multipliers están en item, no en definition
+      if (item.multipliers?.healthRegen) {
+        healthRegen *= item.multipliers.healthRegen;
+      }
+      if (item.multipliers?.energyRegen) {
+        energyRegen *= item.multipliers.energyRegen;
       }
     });
 
-    return {
-      ... super.getState(),
-      username: this.username,
-      energy: this.energy,
-      maxEnergy: this.maxEnergy,
-      maxHealth: this.maxHealth,
-      owner: this.owner,
-      radius: this.radius,
-      respawnTime: this.respawnTime,
-      speed: this.speed,
-      buffs: activeBuffs, // Enviar buffs activos al cliente
-    };
+    // Aplicar modificadores de buffs
+    this.buffs.forEach((buff) => {
+      if (buff.effect.stat === 'healthRegen') {
+        healthRegen *= buff. effect.multiplier;
+      }
+      if (buff.effect. stat === 'energyRegen') {
+        energyRegen *= buff.effect.multiplier;
+      }
+    });
+
+    return { healthRegen, energyRegen };
+  }
+  // Obtener resistencia total para un atributo específico
+  getResistance(attribute) {
+    let resistance = 0;
+    const resistanceAttr = attribute + 'Resistance';
+
+    this.getEquippedItems().forEach((item) => {
+      if (item.definition?.attributes?.[resistanceAttr]) {
+        resistance += item.definition.attributes[resistanceAttr];
+      }
+      if (item.multipliers?.[resistanceAttr]) {
+        resistance *= item.multipliers[resistanceAttr];
+      }
+    });
+
+    // Aplicar buffs de resistencia
+    this.buffs.forEach((buff) => {
+      if (buff.effect.stat === resistanceAttr) {
+        resistance *= buff.effect.multiplier;
+      }
+    });
+
+    return resistance;
+  }
+  // Obtener velocidad actual considerando buffs y equipamiento
+  getSpeed() {
+    let speed = this.speed;
+    this.getEquippedItems().forEach((item) => {
+      if (item. definition?.attributes?.speed) {
+        speed += item.definition.attributes.speed;
+      }
+      if (item.multipliers?.speed) {
+        speed *= item. multipliers.speed;
+      }
+    });
+
+    this.buffs.forEach((buff) => {
+      if (buff.effect. stat === 'speed') {
+        speed *= buff.effect.multiplier;
+      }
+    });
+
+    return speed;
+  }
+  // Obtener lista de poderes disponibles según equipamiento
+  getAvailablePowers() {
+    this.availablePowers = [];
+    ['rightHand', 'leftHand'].forEach((hand) => {
+      const weapon = this.equipment[hand];
+      if (weapon?.definition?.powers) {
+        this.availablePowers.push(...weapon.definition.powers);
+      }
+    });
+    return this.availablePowers;
+  }
+  // Obtener el multiplicador total para una stat
+  getStatMultiplier(statName) {
+    let multiplier = 1;
+    this.buffs.forEach((buff) => {
+      if(buff.effect.stat && buff.effect.stat === statName) {
+        multiplier *= buff.effect.multiplier;
+      }
+    });
+    return multiplier;
+  }
+  // Obtener el valor efectivo de una stat (base * multiplicador)
+  getStat(statName) {
+    const baseValue = this.stats[statName] || 0;
+    const multiplier = this.getStatMultiplier(statName);
+    return baseValue * multiplier;
+  }
+  // Regenerar salud y energía calculando tasas con buffs y equipamiento
+  regenerate() {
+    const maxHealth = this.getStat('maxHealth');
+    const maxEnergy = this.getStat('maxEnergy');
+    const healthRegen = this.getStat('healthRegen');
+    const energyRegen = this.getStat('energyRegen');
+  
+    // Regenerar salud
+    if (this.health < maxHealth) {
+      this.health += healthRegen;
+      if (this.health > maxHealth) {
+        this.health = maxHealth;
+      }
+    }
+  
+    // Regenerar energía
+    if (this.energy < maxEnergy) {
+      this.energy += energyRegen;
+      if (this.energy > maxEnergy) {
+        this.energy = maxEnergy;
+      }
+    }
   }
 }
 

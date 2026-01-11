@@ -15,12 +15,24 @@ const itemProperties = {
     },
     potion_health_small: {
         name: "Poción de Vida Pequeña",
+        buff: "instantHealth", // Buff asociado al uso
         type: "consumable",
         stackSize: 10, // Apilable hasta 10
         rarity: "common",
         sprite: "potion_health_small.png",
         attributes: {
-            healAmount: 25, // Restaura 25 de vida
+            healAmount: 50, // Restaura 50 de vida
+        },
+    },
+    potion_energy_small: {
+        name: "Poción de Energía Pequeña",
+        buff: "instantEnergy",
+        type: "consumable",
+        stackSize: 10,
+        rarity: "common",
+        sprite: "potion_energy_small.png",
+        attributes: {
+            energyAmount: 50, // Restaura 50 de energía
         },
     },
 };
@@ -30,6 +42,11 @@ const itemMultipliers = {
     attackSpeed: 1.0,
     defense: 1.0,
     reflex: 1.0,
+    speed: 1.0,
+    healthRegen: 1.0,
+    energyRegen: 1.0,
+    maxHealth: 1.0,
+    maxEnergy: 1.0,
     criticRatio: 1.0,
     fireResistance: 1.0,
     iceResistance: 1.0,

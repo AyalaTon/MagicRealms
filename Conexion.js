@@ -8,10 +8,11 @@ class Conexion {
 
   sendState(entities) {
     if (this.ws && this.ws.readyState === this.ws.OPEN) {
-      const snapshot = entities. map((e) => e.getState()); // Genera el snapshot aquí
+      const snapshot = entities.map((e) => e.getState()); // Genera el snapshot aquí
       this.ws.send(JSON.stringify({ type: 'update', entities: snapshot }));
     }
   }
 }
 
-module.exports = Conexion;
+export default Conexion;
+// module.exports = Conexion;
