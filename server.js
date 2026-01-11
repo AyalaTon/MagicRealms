@@ -207,6 +207,20 @@ setInterval(() => {
     entity.update();
   });
 
+  //Manejar muertes y respawns
+  persistence.entities.forEach((entity) => {
+    if (entity.type === 'player' && entity.isDead) {
+      if (entity.respawnTime <= Date.now()) {
+        const spawnPoint = persistence.getMap('main').getRandomSpawnPoint();
+        entity.x = spawnPoint.x;
+        entity.y = spawnPoint.y;
+        entity.respawn(spawnPoint.x, spawnPoint.y);
+      } else {
+        console.log(`Jugador ${entity.username} espera para respawnear. Tiempo restante: ${Math.ceil((entity.respawnTime - Date.now()) / 1000)} segundos.`);
+      }
+    }
+  });
+
   // Eliminar entidades muertas (excepto jugadores)
   persistence.entities = persistence.entities.filter((entity) => !entity.isDead || entity.type === 'player');
   // Enviar estado actualizado a todos los clientes conectados
